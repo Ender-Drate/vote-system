@@ -478,3 +478,105 @@ func TestPollClosedStopsVotes(t *testing.T) {
 		t.Fatalf("期望 ErrPollClosed，得到 %v", err)
 	}
 }
+
+// 多选题"最少选择 0 项"：必答但一项都不选也要能提交，且不写选项答案。
+func TestMultipleMinZeroAcceptsEmptyAnswer(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+	p, err := f.st.CreatePoll(ctx, store.PollInput{
+		Title: "可以不选", Status: "open", ShowResults: "always", OnePerIP: true,
+	}, "minzero", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.ReplaceQuestions(ctx, p.ID, []store.QuestionInput{
+		{Type: "multiple", Title: "可以一项都不选", Required: true, MinChoices: 0, MaxChoices: 2, Options: []string{"A", "B"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	qs, err := f.st.ListQuestions(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ip := "203.0.113.120"
+	capID := f.seedCaptcha(t, ip, "246810")
+	if _, err := f.svc.Submit(ctx, SubmitInput{
+		Slug: p.Slug, IP: ip,
+		Captcha: struct{ ID, Answer string }{ID: capID, Answer: "246810"},
+		Answers: []AnswerInput{{QuestionID: qs[0].ID, Choices: []int64{}}},
+	}); err != nil {
+		t.Fatalf("最少选择为 0 时，空答案应被接受：%v", err)
+	}
+
+	res, err := f.svc.AdminResults(ctx, p.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 空答案不该产生选项记录，结果页的"份数"不能被抬高。
+	if res.TotalVotes != 1 || res.Questions[0].TotalResponses != 0 {
+		t.Fatalf("空答案的统计不对：votes=%d responses=%d", res.TotalVotes, res.Questions[0].TotalResponses)
+	}
+}
+
+// 最少选择仍为 1 时，空答案必须继续被拒绝：修 issue #41 不能把原来的校验放松掉。
+func TestMultipleMinOneStillRejectsEmptyAnswer(t *testing.T) {
+	f := newFixture(t, nil)
+	ip := "203.0.113.121"
+	capID := f.seedCaptcha(t, ip, "135790")
+	_, err := f.svc.Submit(context.Background(), SubmitInput{
+		Slug: f.poll.Slug, IP: ip,
+		Captcha: struct{ ID, Answer string }{ID: capID, Answer: "135790"},
+		Answers: []AnswerInput{{QuestionID: f.q[1].ID, Choices: []int64{}}},
+	})
+	var ve *Error
+	if !errors.As(err, &ve) || ve.Code != "invalid_argument" {
+		t.Fatalf("最少选择 1 时空答案应被拒绝，得到 %v", err)
+	}
+}
+
+// 整份投票上限：单选 1 项 + 多选 2 项 = 3 项；上限 3 通过、上限 2 拒绝、0 表示不限。
+func TestPollWideMaxTotalChoices(t *testing.T) {
+	setCap := func(f *fixture, n int) {
+		t.Helper()
+		if err := f.st.UpdatePoll(context.Background(), f.poll.ID, store.PollInput{
+			Title: f.poll.Title, Status: f.poll.Status, ShowResults: f.poll.ShowResults,
+			OnePerIP: true, MaxTotalChoices: n,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	submit := func(f *fixture, ip string) error {
+		t.Helper()
+		id := f.seedCaptcha(t, ip, "112233")
+		_, err := f.svc.Submit(context.Background(), SubmitInput{
+			Slug: f.poll.Slug, IP: ip,
+			Captcha: struct{ ID, Answer string }{ID: id, Answer: "112233"},
+			Answers: f.validAnswers(),
+		})
+		return err
+	}
+
+	f := newFixture(t, nil)
+	setCap(f, 3)
+	if err := submit(f, "203.0.113.130"); err != nil {
+		t.Fatalf("上限 3（正好 3 项）应通过：%v", err)
+	}
+
+	f2 := newFixture(t, nil)
+	setCap(f2, 2)
+	err := submit(f2, "203.0.113.131")
+	var ve *Error
+	if !errors.As(err, &ve) || ve.Code != ErrTooManyChoices.Code {
+		t.Fatalf("超限应返回 %s，得到 %v", ErrTooManyChoices.Code, err)
+	}
+	if n, _ := f2.st.CountVotes(context.Background(), f2.poll.ID); n != 0 {
+		t.Fatalf("超限的提交不应落库，实际 %d 票", n)
+	}
+
+	f3 := newFixture(t, nil)
+	setCap(f3, 0)
+	if err := submit(f3, "203.0.113.132"); err != nil {
+		t.Fatalf("0 表示不限，应通过：%v", err)
+	}
+}

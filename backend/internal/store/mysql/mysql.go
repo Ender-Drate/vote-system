@@ -60,7 +60,7 @@ func wrap(err error) error {
 }
 
 func (s *Store) ListPolls(ctx context.Context, statuses []string) ([]store.Poll, error) {
-	q := `SELECT id, slug, title, summary, status, show_results, one_per_ip, starts_at, ends_at, created_by, created_at, updated_at FROM polls`
+	q := `SELECT id, slug, title, summary, status, show_results, one_per_ip, max_total_choices, starts_at, ends_at, created_by, created_at, updated_at FROM polls`
 	var args []any
 	if len(statuses) > 0 {
 		q += " WHERE status IN (" + strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",") + ")"
@@ -97,7 +97,7 @@ func scanPoll(row scannable) (*store.Poll, error) {
 		created, updated time.Time
 	)
 	if err := row.Scan(&p.ID, &p.Slug, &p.Title, &p.Summary, &p.Status, &p.ShowResults,
-		&p.OnePerIP, &starts, &ends, &createdBy, &created, &updated); err != nil {
+		&p.OnePerIP, &p.MaxTotalChoices, &starts, &ends, &createdBy, &created, &updated); err != nil {
 		return nil, wrap(err)
 	}
 	if starts.Valid {
@@ -116,7 +116,7 @@ func scanPoll(row scannable) (*store.Poll, error) {
 	return &p, nil
 }
 
-const pollColumns = "id, slug, title, summary, status, show_results, one_per_ip, starts_at, ends_at, created_by, created_at, updated_at"
+const pollColumns = "id, slug, title, summary, status, show_results, one_per_ip, max_total_choices, starts_at, ends_at, created_by, created_at, updated_at"
 
 func (s *Store) GetPollBySlug(ctx context.Context, slug string) (*store.Poll, error) {
 	return scanPoll(s.db.QueryRowContext(ctx, "SELECT "+pollColumns+" FROM polls WHERE slug = ?", slug))
@@ -138,9 +138,10 @@ func (s *Store) CreatePoll(ctx context.Context, in store.PollInput, slug string,
 	if createdBy > 0 {
 		creator = createdBy
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO polls (slug, title, summary, status, show_results, one_per_ip, starts_at, ends_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		slug, in.Title, in.Summary, in.Status, in.ShowResults, in.OnePerIP, nullableTime(in.StartsAt), nullableTime(in.EndsAt), creator)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO polls (slug, title, summary, status, show_results, one_per_ip, max_total_choices, starts_at, ends_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		slug, in.Title, in.Summary, in.Status, in.ShowResults, in.OnePerIP, in.MaxTotalChoices,
+		nullableTime(in.StartsAt), nullableTime(in.EndsAt), creator)
 	if err != nil {
 		if _, dup := isDup(err); dup {
 			return nil, store.ErrConflict
@@ -155,8 +156,9 @@ func (s *Store) CreatePoll(ctx context.Context, in store.PollInput, slug string,
 }
 
 func (s *Store) UpdatePoll(ctx context.Context, id int64, in store.PollInput) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE polls SET title=?, summary=?, status=?, show_results=?, one_per_ip=?, starts_at=?, ends_at=? WHERE id=?`,
-		in.Title, in.Summary, in.Status, in.ShowResults, in.OnePerIP, nullableTime(in.StartsAt), nullableTime(in.EndsAt), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE polls SET title=?, summary=?, status=?, show_results=?, one_per_ip=?, max_total_choices=?, starts_at=?, ends_at=? WHERE id=?`,
+		in.Title, in.Summary, in.Status, in.ShowResults, in.OnePerIP, in.MaxTotalChoices,
+		nullableTime(in.StartsAt), nullableTime(in.EndsAt), id)
 	if err != nil {
 		return err
 	}

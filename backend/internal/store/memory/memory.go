@@ -104,7 +104,8 @@ func (s *Store) CreatePoll(_ context.Context, in store.PollInput, slug string, c
 	p := &store.Poll{
 		ID: s.nextID(), Slug: slug, Title: in.Title, Summary: in.Summary,
 		Status: in.Status, ShowResults: in.ShowResults, OnePerIP: in.OnePerIP,
-		StartsAt: in.StartsAt, EndsAt: in.EndsAt,
+		MaxTotalChoices: in.MaxTotalChoices,
+		StartsAt:        in.StartsAt, EndsAt: in.EndsAt,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if createdBy > 0 {
@@ -124,7 +125,7 @@ func (s *Store) UpdatePoll(_ context.Context, id int64, in store.PollInput) erro
 		return store.ErrNotFound
 	}
 	p.Title, p.Summary, p.Status, p.ShowResults = in.Title, in.Summary, in.Status, in.ShowResults
-	p.OnePerIP, p.StartsAt, p.EndsAt = in.OnePerIP, in.StartsAt, in.EndsAt
+	p.OnePerIP, p.MaxTotalChoices, p.StartsAt, p.EndsAt = in.OnePerIP, in.MaxTotalChoices, in.StartsAt, in.EndsAt
 	p.UpdatedAt = time.Now()
 	return nil
 }

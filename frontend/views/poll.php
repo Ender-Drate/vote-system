@@ -13,6 +13,8 @@ $endsAt = $poll['ends_at'] ?? null;
 $hasVoted = !empty($poll['has_voted']);
 $canVote = !empty($poll['can_vote']);
 $resultsVisible = !empty($poll['results_visible']);
+// 整份投票最多能勾几项（0 = 不限）；排序题与简答题不计入。
+$maxTotal = (int)($poll['max_total_choices'] ?? 0);
 ?>
 <div class="wrap">
   <article class="ballot">
@@ -60,8 +62,16 @@ $resultsVisible = !empty($poll['results_visible']);
         <?php endif; ?>
       </div>
     <?php else: ?>
-      <form class="vote-form" method="post" action="<?= e(url('/p/' . rawurlencode($slug) . '/submit')) ?>" novalidate>
+      <form class="vote-form" method="post" action="<?= e(url('/p/' . rawurlencode($slug) . '/submit')) ?>" novalidate
+            <?php if ($maxTotal > 0): ?>data-max-total="<?= $maxTotal ?>"<?php endif; ?>>
         <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+
+        <?php if ($maxTotal > 0): ?>
+          <p class="vote-total" data-total-note aria-live="polite">
+            <?= e(t('poll.total_max', ['n' => $maxTotal])) ?> ·
+            <?= e(t('poll.total_selected')) ?> <span class="vote-total-count" data-total-count>0</span>
+          </p>
+        <?php endif; ?>
 
         <?php foreach ($questions as $index => $q): ?>
           <?php
@@ -99,6 +109,8 @@ $resultsVisible = !empty($poll['results_visible']);
                 $max = (int)($q['max_choices'] ?? 0);
                 $hintParts = [];
                 if ($min > 0) { $hintParts[] = t('poll.at_least', ['n' => $min]); }
+                // 最少选择为 0 是管理端刻意设置的"可以不选"，要在页面上说清楚。
+                elseif ($type === 'multiple') { $hintParts[] = t('poll.at_least_none'); }
                 if ($max > 0) { $hintParts[] = t('poll.at_most', ['n' => $max]); }
               ?>
               <?php if ($hintParts !== []): ?>

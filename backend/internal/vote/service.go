@@ -45,6 +45,7 @@ var (
 	ErrIPBlocked      = &Error{Code: "ip_blocked", Message: "该 IP 不允许投票"}
 	ErrRateLimited    = &Error{Code: "rate_limited", Message: "操作过于频繁"}
 	ErrInvalid        = &Error{Code: "invalid_argument", Message: "参数不合法"}
+	ErrTooManyChoices = &Error{Code: "too_many_choices", Message: "整份投票勾选的选项超过上限"}
 	ErrResultsHidden  = &Error{Code: "results_hidden", Message: "结果暂不公开"}
 )
 
@@ -367,15 +368,17 @@ type QuestionView struct {
 }
 
 type PollView struct {
-	Slug           string  `json:"slug"`
-	Title          string  `json:"title"`
-	Summary        string  `json:"summary"`
-	Status         string  `json:"status"`
-	CanVote        bool    `json:"can_vote"`
-	HasVoted       bool    `json:"has_voted"`
-	ResultsVisible bool    `json:"results_visible"`
-	StartsAt       *string `json:"starts_at"`
-	EndsAt         *string `json:"ends_at"`
+	Slug           string `json:"slug"`
+	Title          string `json:"title"`
+	Summary        string `json:"summary"`
+	Status         string `json:"status"`
+	CanVote        bool   `json:"can_vote"`
+	HasVoted       bool   `json:"has_voted"`
+	ResultsVisible bool   `json:"results_visible"`
+	// MaxTotalChoices 是整份投票的选项总数上限（0 表示不限），前台据此提示与禁用提交。
+	MaxTotalChoices int     `json:"max_total_choices"`
+	StartsAt        *string `json:"starts_at"`
+	EndsAt          *string `json:"ends_at"`
 }
 
 type PollSummaryView struct {
@@ -496,7 +499,8 @@ func (s *Service) pollView(ctx context.Context, p *store.Poll, hasVoted bool) Po
 	return PollView{
 		Slug: p.Slug, Title: p.Title, Summary: p.Summary, Status: p.Status,
 		CanVote: canVote, HasVoted: hasVoted, ResultsVisible: visible,
-		StartsAt: timeStr(p.StartsAt), EndsAt: timeStr(p.EndsAt),
+		MaxTotalChoices: p.MaxTotalChoices,
+		StartsAt:        timeStr(p.StartsAt), EndsAt: timeStr(p.EndsAt),
 	}
 }
 
@@ -610,7 +614,9 @@ func (s *Service) validateAnswers(qs []store.Question, in []AnswerInput) ([]stor
 			out = append(out, store.Answer{QuestionID: q.ID, Choices: []int64{a.Choices[0]}})
 		case "multiple":
 			if len(a.Choices) == 0 {
-				if q.Required {
+				// MinChoices == 0 表示"可以一项都不选"：此时必答只约束"要回答这道题"，
+				// 空答案本身合法，也不写 vote_answers（避免拉高结果页的"份数"）。
+				if q.Required && q.MinChoices > 0 {
 					return nil, errf("invalid_argument", "题目 %d 至少选择一项", q.ID)
 				}
 				continue
@@ -678,6 +684,22 @@ func (s *Service) validateAnswers(qs []store.Question, in []AnswerInput) ([]stor
 	return out, nil
 }
 
+// choicesTotal 统计一次提交在单选/多选题目上勾选的总项数。
+// 排序题要求给全部选项排名、简答题没有选项，它们都不算"投票"。
+func choicesTotal(qs []store.Question, answers []store.Answer) int {
+	kind := make(map[int64]string, len(qs))
+	for i := range qs {
+		kind[qs[i].ID] = qs[i].Type
+	}
+	total := 0
+	for _, a := range answers {
+		if t := kind[a.QuestionID]; t == "single" || t == "multiple" {
+			total += len(a.Choices)
+		}
+	}
+	return total
+}
+
 func (s *Service) Submit(ctx context.Context, in SubmitInput) (*SubmitResult, error) {
 	_, ip, err := parseIP(in.IP)
 	if err != nil {
@@ -733,6 +755,15 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (*SubmitResult, er
 	answers, err := s.validateAnswers(qs, in.Answers)
 	if err != nil {
 		return nil, err
+	}
+	// 整份投票的票数上限：单选 / 多选勾选的项数之和，排序与简答不计数。
+	if p.MaxTotalChoices > 0 {
+		if total := choicesTotal(qs, answers); total > p.MaxTotalChoices {
+			return nil, &Error{
+				Code:    ErrTooManyChoices.Code,
+				Message: fmt.Sprintf("整份投票最多 %d 项，当前选了 %d 项", p.MaxTotalChoices, total),
+			}
+		}
 	}
 
 	if err := s.verifyCaptcha(ctx, in.Captcha.ID, in.Captcha.Answer, in.IP, ip); err != nil {

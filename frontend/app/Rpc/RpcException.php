@@ -24,7 +24,7 @@ final class RpcException extends \RuntimeException
     {
         $known = [
             'poll_not_found', 'poll_closed', 'already_voted', 'captcha_invalid', 'captcha_expired',
-            'ip_blocked', 'rate_limited', 'invalid_argument', 'results_hidden',
+            'ip_blocked', 'rate_limited', 'invalid_argument', 'too_many_choices', 'results_hidden',
         ];
         return in_array($this->rpcCode, $known, true) ? 'err.' . $this->rpcCode : 'err.internal';
     }

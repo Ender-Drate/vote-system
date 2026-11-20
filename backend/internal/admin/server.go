@@ -513,6 +513,7 @@ func (s *Server) csrfFor(r *http.Request) string {
 
 type pollFormData struct {
 	Poll          *store.Poll
+	NewPoll       bool
 	QuestionsJSON string
 	HasVotes      bool
 }
@@ -554,7 +555,7 @@ func (s *Server) handlePollForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "poll_form", pageData{
 		Title: title, Nav: "dashboard", Admin: admin, CSRF: s.csrfFor(r),
 		Flash: r.URL.Query().Get("ok"),
-		Data:  pollFormData{Poll: p, HasVotes: hasVotes, QuestionsJSON: storedQuestionsJSON(qs)},
+		Data:  pollFormData{Poll: p, NewPoll: p == nil, HasVotes: hasVotes, QuestionsJSON: storedQuestionsJSON(qs)},
 	})
 }
 
@@ -600,11 +601,24 @@ func (s *Server) handlePollSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(problems) > 0 {
+		var echoID int64
+		hasVotes := false
+		if existing != nil {
+			echoID = existing.ID
+			if c, _ := s.st.CountVotes(r.Context(), existing.ID); c > 0 {
+				hasVotes = true
+			}
+		}
 		w.WriteHeader(http.StatusBadRequest)
 		s.render(w, r, "poll_form", pageData{
 			Title: "编辑投票", Nav: "dashboard", Admin: admin, CSRF: s.csrfFor(r),
 			Error: strings.Join(problems, "；"),
-			Data:  pollFormData{Poll: existing, HasVotes: existing != nil, QuestionsJSON: inputQuestionsJSON(qs)},
+			// 回显用户刚填的内容：以前这里传 existing，新建投票一旦校验失败，
+			// 标题、简介、时间、整体上限全部被清空，等于重填一遍。
+			Data: pollFormData{
+				Poll: pollForEcho(in, echoID), NewPoll: existing == nil,
+				HasVotes: hasVotes, QuestionsJSON: inputQuestionsJSON(qs),
+			},
 		})
 		return
 	}
@@ -674,7 +688,7 @@ func (s *Server) handlePollStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	in := store.PollInput{
 		Title: p.Title, Summary: p.Summary, Status: status, ShowResults: p.ShowResults,
-		OnePerIP: p.OnePerIP, StartsAt: p.StartsAt, EndsAt: p.EndsAt,
+		OnePerIP: p.OnePerIP, MaxTotalChoices: p.MaxTotalChoices, StartsAt: p.StartsAt, EndsAt: p.EndsAt,
 	}
 	if err := s.st.UpdatePoll(r.Context(), p.ID, in); err != nil {
 		s.log.Error("更新投票状态失败", "err", err)

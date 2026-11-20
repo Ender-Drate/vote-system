@@ -173,13 +173,14 @@ func parsePollForm(r *http.Request) (store.PollInput, []store.QuestionInput, []s
 	var problems []string
 
 	in := store.PollInput{
-		Title:       strings.TrimSpace(f.Get("title")),
-		Summary:     strings.TrimSpace(f.Get("summary")),
-		Status:      f.Get("status"),
-		ShowResults: f.Get("show_results"),
-		OnePerIP:    true, // 一 IP 一票由唯一键强制，管理端不提供开关
-		StartsAt:    parseLocalTime(f.Get("starts_at")),
-		EndsAt:      parseLocalTime(f.Get("ends_at")),
+		Title:           strings.TrimSpace(f.Get("title")),
+		Summary:         strings.TrimSpace(f.Get("summary")),
+		Status:          f.Get("status"),
+		ShowResults:     f.Get("show_results"),
+		OnePerIP:        true, // 一 IP 一票由唯一键强制，管理端不提供开关
+		MaxTotalChoices: atoiDefault(f.Get("max_total_choices"), 0),
+		StartsAt:        parseLocalTime(f.Get("starts_at")),
+		EndsAt:          parseLocalTime(f.Get("ends_at")),
 	}
 	if in.Status != "draft" && in.Status != "open" && in.Status != "closed" {
 		in.Status = "draft"
@@ -198,13 +199,59 @@ func parsePollForm(r *http.Request) (store.PollInput, []store.QuestionInput, []s
 	if in.StartsAt != nil && in.EndsAt != nil && in.EndsAt.Before(*in.StartsAt) {
 		problems = append(problems, "结束时间不能早于开始时间")
 	}
+	if in.MaxTotalChoices < 0 {
+		in.MaxTotalChoices = 0
+	}
+	if in.MaxTotalChoices > maxTotalChoicesLimit {
+		problems = append(problems, "整体最多票数不能超过 "+strconv.Itoa(maxTotalChoicesLimit))
+	}
 
 	questions, qProblems := parseQuestions(f)
 	problems = append(problems, qProblems...)
 	if len(questions) == 0 {
 		problems = append(problems, "至少要有一道题目")
 	}
+	// 上限比必答题强制的最少勾选数还小的话，这份投票永远提交不上去；
+	// 提前拦下，免得保存完才发现是个死局。
+	if in.MaxTotalChoices > 0 && len(questions) > 0 {
+		if need := requiredChoiceSum(questions); need > in.MaxTotalChoices {
+			problems = append(problems, "整体最多 "+strconv.Itoa(in.MaxTotalChoices)+
+				" 票，但必答题就要选 "+strconv.Itoa(need)+" 项，投票将无法提交")
+		}
+	}
 	return in, questions, problems
+}
+
+// maxTotalChoicesLimit 与"最多 20 题 × 每题最多 30 个选项"对齐。
+const maxTotalChoicesLimit = 600
+
+// requiredChoiceSum 是"一次合法提交至少要在单选/多选题上勾几项"。
+// 排序题要求全排序、简答题没有选项，都不算票。
+func requiredChoiceSum(qs []store.QuestionInput) int {
+	sum := 0
+	for _, q := range qs {
+		if !q.Required {
+			continue
+		}
+		switch q.Type {
+		case "single":
+			sum++
+		case "multiple":
+			// 最少选择为 0 时"一项不选"也是合法回答，不强制计入。
+			sum += q.MinChoices
+		}
+	}
+	return sum
+}
+
+// pollForEcho 把已解析的表单还原成可渲染的 Poll：校验失败时用它回显，
+// 否则用户填了半天的标题、时间、整体上限会因为一次报错全部清空。
+func pollForEcho(in store.PollInput, id int64) *store.Poll {
+	return &store.Poll{
+		ID: id, Title: in.Title, Summary: in.Summary, Status: in.Status,
+		ShowResults: in.ShowResults, OnePerIP: in.OnePerIP,
+		MaxTotalChoices: in.MaxTotalChoices, StartsAt: in.StartsAt, EndsAt: in.EndsAt,
+	}
 }
 
 func parseLocalTime(v string) *time.Time {
@@ -318,10 +365,15 @@ func parseQuestions(f map[string][]string) ([]store.QuestionInput, []string) {
 			if len(q.Options) < 2 {
 				problems = append(problems, label+"至少需要两个选项")
 			}
+			// 最少选择允许填 0：多选题可以"一项都不选"，必答只表示"要回答这道题"。
+			// 以前这里把 0 强行改回 1，管理端填 0 保存后总是变成 1。
 			q.MinChoices = atoiDefault(first(f[prefix+"min"]), 1)
 			q.MaxChoices = atoiDefault(first(f[prefix+"max"]), 0)
-			if q.MinChoices < 1 {
-				q.MinChoices = 1
+			if q.MinChoices < 0 {
+				q.MinChoices = 0
+			}
+			if q.MaxChoices < 0 {
+				q.MaxChoices = 0
 			}
 			if q.MinChoices > len(q.Options) {
 				problems = append(problems, label+"的最少选择数超过了选项数量")
