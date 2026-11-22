@@ -83,12 +83,24 @@ func TestIntegrationVoteAndDuplicate(t *testing.T) {
 
 	poll, err := st.CreatePoll(ctx, store.PollInput{
 		Title: "集成测试投票 " + time.Now().Format("150405.000"), Status: "open",
-		ShowResults: "always", OnePerIP: true,
+		ShowResults: "always", OnePerIP: true, MaxTotalChoices: 5,
 	}, "it"+time.Now().Format("150405000"), 0)
 	if err != nil {
 		t.Fatalf("CreatePoll: %v", err)
 	}
 	t.Cleanup(func() { _ = st.DeletePoll(ctx, poll.ID) })
+	if poll.MaxTotalChoices != 5 {
+		t.Fatalf("max_total_choices 没有正确往返：%d", poll.MaxTotalChoices)
+	}
+	// 改状态/改设置时必须整条带上这一列，否则会被默认值 0 冲掉。
+	if err := st.UpdatePoll(ctx, poll.ID, store.PollInput{
+		Title: poll.Title, Status: "open", ShowResults: "always", OnePerIP: true, MaxTotalChoices: 7,
+	}); err != nil {
+		t.Fatalf("UpdatePoll: %v", err)
+	}
+	if got, err := st.GetPoll(ctx, poll.ID); err != nil || got.MaxTotalChoices != 7 {
+		t.Fatalf("max_total_choices 更新失败：%+v %v", got, err)
+	}
 
 	if err := st.ReplaceQuestions(ctx, poll.ID, []store.QuestionInput{
 		{Type: "single", Title: "选一个", Required: true, Options: []string{"甲", "乙"}},

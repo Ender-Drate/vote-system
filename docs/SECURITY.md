@@ -44,6 +44,7 @@ MySQL
 | 验证码答案泄露 | 库里只有 `sha256(id‖答案‖rpc_secret)`，PNG 只在进程内存 | `vote.CreateCaptcha` |
 | 刷提交 | 每 IP 每分钟 3 次投票、每分钟 10 次验证码申请（令牌桶） | `vote.allow` |
 | 题目/选项越权 | 答案必须对得上"该投票的题目 + 该题的选项"，多选题还校验最少/最多与去重 | `vote.validateAnswers` |
+| 单题上限被绕过 | 整份投票可设"最多票数"，服务端把所有单选/多选勾选项求和后与上限比一次（前端只做提示，不作数） | `vote.Submit` + `vote.choicesTotal` |
 | 关闭后的票 | `IsOpenAt` 同时校验 status 与时间窗；写入前再判一次 | `vote.Submit` |
 | 定向禁投 | `ip_rules` 支持 block/allow（CIDR），默认动作可设为 deny（白名单制） | `vote.ipAllowed` |
 

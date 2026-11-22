@@ -254,7 +254,12 @@ final class PollController
             } else {
                 $item['choices'] = $answers[$id]['choices'] ?? [];
                 if ($item['choices'] === []) {
-                    continue;
+                    // 多选题的最少选择为 0 时，"一项都不选"也是合法回答：空数组也要发过去，
+                    // 后台才能区分"没回答这道必答题"和"回答了但一项没选"。
+                    $min = (int)($q['min_choices'] ?? 1);
+                    if ($type !== 'multiple' || $min > 0) {
+                        continue;
+                    }
                 }
             }
             $items[] = $item;

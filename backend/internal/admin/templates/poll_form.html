@@ -4,16 +4,16 @@
 {{with .Data}}
 <main class="page">
   <div class="page-head">
-    <h1>{{if .Poll}}编辑投票{{else}}新建投票{{end}}</h1>
+    <h1>{{if .NewPoll}}新建投票{{else}}编辑投票{{end}}</h1>
     <div class="head-acts">
-      {{if .Poll}}<a class="btn-quiet" href="/polls/{{.Poll.ID}}/results">查看结果</a>{{end}}
+      {{if not .NewPoll}}<a class="btn-quiet" href="/polls/{{.Poll.ID}}/results">查看结果</a>{{end}}
       <a class="btn-quiet" href="/">返回列表</a>
     </div>
   </div>
 
   {{if .HasVotes}}<p class="notice">该投票已经有人投过票，题目与选项变为只读；如需改题，请新建一个投票。</p>{{end}}
 
-  <form method="post" action="{{if .Poll}}/polls/{{.Poll.ID}}{{else}}/polls{{end}}" class="form">
+  <form method="post" action="{{if .NewPoll}}/polls{{else}}/polls/{{.Poll.ID}}{{end}}" class="form">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
 
     <section class="card">
@@ -43,9 +43,16 @@
           <input type="datetime-local" name="starts_at" value="{{if .Poll}}{{fmtLocalIn .Poll.StartsAt}}{{end}}">
         </label>
       </div>
-      <label>结束时间（留空不限）
-        <input type="datetime-local" name="ends_at" value="{{if .Poll}}{{fmtLocalIn .Poll.EndsAt}}{{end}}">
-      </label>
+      <div class="grid-2">
+        <label>结束时间（留空不限）
+          <input type="datetime-local" name="ends_at" value="{{if .Poll}}{{fmtLocalIn .Poll.EndsAt}}{{end}}">
+        </label>
+        <label>整份投票最多票数（0 表示不限）
+          <input type="number" name="max_total_choices" min="0" max="600" step="1"
+                 value="{{if .Poll}}{{.Poll.MaxTotalChoices}}{{else}}0{{end}}">
+        </label>
+      </div>
+      <p class="muted small">整份投票最多票数：一次提交中所有单选 / 多选题目勾选的总项数上限，例如填 3 就是整份投票最多投 3 票。排序题与简答题不计入。</p>
     </section>
 
     <section class="card">
@@ -53,7 +60,8 @@
         <h2>题目</h2>
         {{if not .HasVotes}}<button type="button" class="btn-quiet" data-add-question>＋ 添加题目</button>{{end}}
       </div>
-      <p class="muted small">题型：单选 / 多选 / 简答 / 排序。排序题的选项就是参与排序的条目；简答题的选项会被忽略。</p>
+      <p class="muted small">题型：单选 / 多选 / 简答 / 排序。排序题的选项就是参与排序的条目；简答题的选项会被忽略。
+        多选题的"最少选择"可以填 0，表示可以一项都不选（此时"必答"只要求回答这道题）。</p>
 
       <div id="questions"
            data-qjson="{{.QuestionsJSON}}"
@@ -68,7 +76,7 @@
     </div>
   </form>
 
-  {{if .Poll}}
+  {{if not .NewPoll}}
   <section class="card danger-zone">
     <h2>危险操作</h2>
     <p class="muted">删除不可恢复；已有投票记录的投票会被拒绝删除。</p>

@@ -25,11 +25,14 @@ type Poll struct {
 	Status      string // draft | open | closed
 	ShowResults string // never | after_vote | always
 	OnePerIP    bool
-	StartsAt    *time.Time
-	EndsAt      *time.Time
-	CreatedBy   *int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// MaxTotalChoices 是整份投票的选项总数上限：一次提交里所有单选/多选题勾选的
+	// 项数之和不得超过它。0 表示不限；排序题与简答题不计入。
+	MaxTotalChoices int
+	StartsAt        *time.Time
+	EndsAt          *time.Time
+	CreatedBy       *int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 func (p *Poll) IsOpenAt(now time.Time) bool {
@@ -161,13 +164,14 @@ type AuditEntry struct {
 
 // PollInput 是管理端提交的投票元信息。
 type PollInput struct {
-	Title       string
-	Summary     string
-	Status      string
-	ShowResults string
-	OnePerIP    bool
-	StartsAt    *time.Time
-	EndsAt      *time.Time
+	Title           string
+	Summary         string
+	Status          string
+	ShowResults     string
+	OnePerIP        bool
+	MaxTotalChoices int
+	StartsAt        *time.Time
+	EndsAt          *time.Time
 }
 
 // QuestionInput 是管理端提交的题目（含选项文本，按顺序）。

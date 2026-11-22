@@ -70,6 +70,63 @@
     }
   }
 
+  // stateOf 把服务端给的题目 JSON（或空）归一化成编辑器内部状态。
+  // 编辑器里所有可编辑字段都放在这个对象上，切题型时先读回 DOM 再重建，
+  // 选项文字才不会跟着"多选 → 单选"一起消失（issue #41 第 3 条）。
+  function stateOf(q) {
+    return {
+      type: q && q.type ? q.type : "single",
+      title: q && q.title ? q.title : "",
+      hint: q && q.hint ? q.hint : "",
+      required: q ? !!q.required : true,
+      min_choices: q && q.min_choices != null ? q.min_choices : 1,
+      max_choices: q && q.max_choices != null ? q.max_choices : 0,
+      max_length: q && q.max_length != null ? q.max_length : 300,
+      options: q && q.options ? q.options.slice() : ["", ""]
+    };
+  }
+
+  function byName(fieldset, name) {
+    return fieldset.querySelector('[name="' + name + '"]');
+  }
+
+  // num 读数字输入框；空串/非法值退回旧值，避免"清空一下再切题型"把设置弄成 0。
+  function num(value, prev) {
+    var s = String(value == null ? "" : value).trim();
+    if (s === "" || isNaN(Number(s))) return prev;
+    return Number(s);
+  }
+
+  // readState 把当前 DOM 里正在编辑的内容读回状态对象。
+  function readState(fieldset, idx) {
+    var st = fieldset._qstate || stateOf(null);
+    var p = "q" + idx + "_";
+
+    var title = byName(fieldset, p + "title");
+    var hint = byName(fieldset, p + "hint");
+    var required = byName(fieldset, p + "required");
+    var min = byName(fieldset, p + "min");
+    var max = byName(fieldset, p + "max");
+    var maxLen = byName(fieldset, p + "max_length");
+
+    if (title) st.title = title.value;
+    if (hint) st.hint = hint.value;
+    if (required && required.type === "checkbox") st.required = required.checked;
+    if (min) st.min_choices = num(min.value, st.min_choices);
+    if (max) st.max_choices = num(max.value, st.max_choices);
+    if (maxLen) st.max_length = num(maxLen.value, st.max_length);
+
+    // 简答题没有选项区；此时保留上一次的选项，切回选择题还能找回。
+    var optsBox = fieldset.querySelector(".opts");
+    if (optsBox) {
+      var values = [];
+      var rows = optsBox.querySelectorAll(".opt-row input");
+      for (var i = 0; i < rows.length; i++) values.push(rows[i].value);
+      st.options = values;
+    }
+    return st;
+  }
+
   function buildLimits(fieldset, idx, q) {
     var old = fieldset.querySelector(".q-limits");
     if (old) old.remove();
@@ -88,8 +145,15 @@
 
     box.appendChild(requiredLabel);
     if (q && (q.type === "multiple")) {
-      box.appendChild(labeled("最少选择", input("q" + idx + "_min", "number", q.min_choices || 1)));
-      box.appendChild(labeled("最多选择（0 表示不限）", input("q" + idx + "_max", "number", q.max_choices || 0)));
+      // 0 是合法值（可以一项都不选），所以不能用 `|| 1` 兜底。
+      var minInput = input("q" + idx + "_min", "number", q.min_choices != null ? q.min_choices : 1);
+      minInput.min = "0";
+      minInput.step = "1";
+      var maxInput = input("q" + idx + "_max", "number", q.max_choices != null ? q.max_choices : 0);
+      maxInput.min = "0";
+      maxInput.step = "1";
+      box.appendChild(labeled("最少选择（0 表示可不选）", minInput));
+      box.appendChild(labeled("最多选择（0 表示不限）", maxInput));
     } else if (q && q.type === "text") {
       box.appendChild(labeled("字数上限", input("q" + idx + "_max_length", "number", q.max_length || 300)));
     } else {
@@ -111,7 +175,7 @@
     box.dataset.optHost = "1";
     fieldset.appendChild(box);
 
-    var labels = (q && q.options) ? q.options : ["", ""];
+    var labels = (q && q.options && q.options.length) ? q.options : ["", ""];
     for (var i = 0; i < labels.length; i++) addOptionRow(box, idx, labels[i]);
 
     if (!readonly) {
@@ -152,8 +216,10 @@
 
   function buildQuestion(q) {
     var idx = nextIndex++;
+    var state = stateOf(q);
     var fieldset = el("fieldset", "q");
     fieldset.dataset.q = String(idx);
+    fieldset._qstate = state;
 
     var legend = el("legend");
     legend.appendChild(el("span", "q-no", "第 " + (host.querySelectorAll("fieldset.q").length + 1) + " 题"));
@@ -176,27 +242,31 @@
       var opt = document.createElement("option");
       opt.value = TYPES[t][0];
       opt.textContent = TYPES[t][1];
-      if (q && q.type === TYPES[t][0]) opt.selected = true;
+      if (state.type === TYPES[t][0]) opt.selected = true;
       select.appendChild(opt);
     }
     top.appendChild(labeled("题型", select));
-    var title = input("q" + idx + "_title", "text", q ? q.title : "");
+    var title = input("q" + idx + "_title", "text", state.title);
     title.placeholder = "题干";
     top.appendChild(labeled("题干", title));
     if (readonly) {
-      top.appendChild(mirror("q" + idx + "_type", q && q.type ? q.type : "single"));
+      top.appendChild(mirror("q" + idx + "_type", state.type));
     }
     fieldset.appendChild(top);
 
-    fieldset.appendChild(labeled("提示（可选）", input("q" + idx + "_hint", "text", q ? q.hint : "")));
+    fieldset.appendChild(labeled("提示（可选）", input("q" + idx + "_hint", "text", state.hint)));
 
-    buildLimits(fieldset, idx, q);
-    buildOptions(fieldset, idx, q);
+    buildLimits(fieldset, idx, state);
+    buildOptions(fieldset, idx, state);
 
     select.addEventListener("change", function () {
-      var current = { type: select.value, min_choices: 1, max_choices: 0, max_length: 300, required: true };
-      buildLimits(fieldset, idx, current);
-      buildOptions(fieldset, idx, current);
+      // 先保存当前编辑内容（含选项文字），再按新题型重建控件；
+      // 以前这里传的是一个全新的默认对象，已填的选项会被整块丢掉。
+      var next = readState(fieldset, idx);
+      next.type = select.value;
+      fieldset._qstate = next;
+      buildLimits(fieldset, idx, next);
+      buildOptions(fieldset, idx, next);
     });
 
     host.appendChild(fieldset);

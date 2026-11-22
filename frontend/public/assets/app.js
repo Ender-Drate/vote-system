@@ -126,9 +126,52 @@
     worker.postMessage({ salt: challenge.salt, bits: challenge.bits });
   })();
 
+  /* ---- 整份投票的选项总数上限 ---- */
+  (function () {
+    var form = document.querySelector("form.vote-form[data-max-total]");
+    if (!form) return;
+    var max = Number(form.getAttribute("data-max-total")) || 0;
+    var note = form.querySelector("[data-total-note]");
+    var count = form.querySelector("[data-total-count]");
+    if (max <= 0) return;
+
+    function chosen() {
+      var n = 0;
+      form.querySelectorAll('input[type="checkbox"], input[type="radio"]').forEach(function (el) {
+        if (el.checked && /^q\d+/.test(el.name || "")) n++;
+      });
+      return n;
+    }
+
+    function refresh() {
+      var n = chosen();
+      var over = n > max;
+      if (count) count.textContent = String(n);
+      if (note) note.setAttribute("data-over", over ? "1" : "0");
+      form.setAttribute("data-over-limit", over ? "1" : "0");
+    }
+
+    form.addEventListener("change", function (event) {
+      var name = (event.target && event.target.name) || "";
+      if (/^q\d+/.test(name)) refresh();
+    });
+    refresh();
+  })();
+
   /* ---- 防重复提交 ---- */
   document.querySelectorAll("form.vote-form").forEach(function (form) {
-    form.addEventListener("submit", function () {
+    form.addEventListener("submit", function (event) {
+      // 超出"整份投票最多票数"时直接拦住：后台也会拒绝，这里只是省一次往返。
+      if (form.getAttribute("data-over-limit") === "1") {
+        event.preventDefault();
+        var note = form.querySelector("[data-total-note]");
+        if (note) {
+          note.setAttribute("data-over", "1");
+          note.setAttribute("tabindex", "-1");
+          note.focus();
+        }
+        return;
+      }
       var btn = form.querySelector('button[type="submit"]');
       if (!btn) return;
       if (btn.dataset.busy === "1") return;

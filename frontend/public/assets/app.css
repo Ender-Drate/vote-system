@@ -236,6 +236,19 @@ h1 {
 .q-hint { color: var(--ink-2); font-size: 14px; margin: 0 0 10px 2.1em; }
 .q-note { color: var(--ink-3); font-size: 13px; margin: 6px 0 12px 2.1em; }
 
+/* 整份投票的选项总数上限：实时显示已选几项，超出时变红。 */
+.vote-total {
+  margin: 0 0 20px;
+  padding: 10px 14px;
+  border-left: 2px solid var(--rule);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.vote-total-count { font-family: var(--mono); color: var(--ink); }
+.vote-total[data-over="1"] { border-left-color: var(--stamp); color: var(--stamp); }
+.vote-total[data-over="1"] .vote-total-count { color: var(--stamp); }
+
 .opts { margin: 12px 0 0 2.1em; display: grid; gap: 8px; }
 .opt {
   display: flex;

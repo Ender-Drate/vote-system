@@ -225,4 +225,123 @@ func TestAdminCannotEditQuestionsAfterVotes(t *testing.T) {
 	}
 }
 
+// issue #41：多选题"最少选择 0"要能原样存下来，整份投票的票数上限也要能设置。
+func TestCreatePollWithMinZeroAndMaxTotal(t *testing.T) {
+	srv, st := newTestServer(t)
+	cookie := login(t, srv)
+	h := srv.Handler()
+	rec := do(t, h, "GET", "/polls/new", nil, []*http.Cookie{cookie}, false)
+	csrf := csrfOf(t, rec.Body.String())
+
+	form := url.Values{
+		"csrf": {csrf}, "title": {"可空多选"}, "status": {"open"}, "show_results": {"always"},
+		"max_total_choices": {"3"},
+		"q0_type":           {"multiple"}, "q0_title": {"想选几个选几个"}, "q0_required": {"on"},
+		"q0_min": {"0"}, "q0_max": {"0"},
+		"q0_opt0": {"甲"}, "q0_opt1": {"乙"}, "q0_opt2": {"丙"},
+	}
+	rec = do(t, h, "POST", "/polls", form, []*http.Cookie{cookie}, false)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("保存应 303，得到 %d：%s", rec.Code, rec.Body.String())
+	}
+
+	ctx := context.Background()
+	polls, err := st.ListPolls(ctx, nil)
+	if err != nil || len(polls) != 1 {
+		t.Fatalf("应创建 1 个投票：%v %d", err, len(polls))
+	}
+	if polls[0].MaxTotalChoices != 3 {
+		t.Fatalf("整体最多票数没存下来：%+v", polls[0])
+	}
+	qs, err := st.ListQuestions(ctx, polls[0].ID)
+	if err != nil || len(qs) != 1 {
+		t.Fatalf("应写入 1 道题：%v %d", err, len(qs))
+	}
+	if qs[0].MinChoices != 0 {
+		t.Fatalf("最少选择 0 被改写成 %d", qs[0].MinChoices)
+	}
+}
+
+// 上限比必答题强制的最少勾选数还小，等于让投票永远提交不上去，必须在保存时拦下。
+func TestCreatePollRejectsUnreachableMaxTotal(t *testing.T) {
+	srv, st := newTestServer(t)
+	cookie := login(t, srv)
+	h := srv.Handler()
+	rec := do(t, h, "GET", "/polls/new", nil, []*http.Cookie{cookie}, false)
+	csrf := csrfOf(t, rec.Body.String())
+
+	form := url.Values{
+		"csrf": {csrf}, "title": {"不可能完成"}, "status": {"open"}, "show_results": {"always"},
+		"max_total_choices": {"1"},
+		"q0_type":           {"single"}, "q0_title": {"第一题"}, "q0_required": {"on"}, "q0_opt0": {"A"}, "q0_opt1": {"B"},
+		"q1_type": {"single"}, "q1_title": {"第二题"}, "q1_required": {"on"}, "q1_opt0": {"C"}, "q1_opt1": {"D"},
+	}
+	rec = do(t, h, "POST", "/polls", form, []*http.Cookie{cookie}, false)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("必然超限的配置应 400，得到 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "投票将无法提交") {
+		t.Fatalf("应说明为什么保存不了：%s", rec.Body.String())
+	}
+	if polls, _ := st.ListPolls(context.Background(), nil); len(polls) != 0 {
+		t.Fatal("校验失败时不应写入投票")
+	}
+}
+
+// 校验失败时要把已填内容回显出来，不能清空成一张空表单。
+func TestPollFormEchoesInputOnError(t *testing.T) {
+	srv, st := newTestServer(t)
+	cookie := login(t, srv)
+	h := srv.Handler()
+	rec := do(t, h, "GET", "/polls/new", nil, []*http.Cookie{cookie}, false)
+	csrf := csrfOf(t, rec.Body.String())
+
+	form := url.Values{
+		"csrf": {csrf}, "title": {"回显标题"}, "summary": {"回显简介"}, "status": {"open"},
+		"show_results": {"always"}, "max_total_choices": {"5"},
+		"q0_type": {"single"}, "q0_title": {"缺选项的题"}, "q0_opt0": {""}, "q0_opt1": {""},
+	}
+	rec = do(t, h, "POST", "/polls", form, []*http.Cookie{cookie}, false)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("缺选项应 400，得到 %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"回显标题", "回显简介", `name="max_total_choices"`, `value="5"`, `action="/polls"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("错误页应回显 %q：%s", want, body)
+		}
+	}
+	if strings.Contains(body, "/delete") {
+		t.Fatal("新建失败时不应渲染删除投票的表单")
+	}
+	_ = st
+}
+
+// 改状态时不能把整体上限冲掉（handlePollStatus 会整条 UPDATE）。
+func TestPollStatusChangeKeepsMaxTotal(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	p, err := st.CreatePoll(ctx, store.PollInput{
+		Title: "带上限", Status: "open", ShowResults: "always", OnePerIP: true, MaxTotalChoices: 4,
+	}, "cap00001", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := login(t, srv)
+	h := srv.Handler()
+	rec := do(t, h, "GET", "/polls/"+itoa(p.ID), nil, []*http.Cookie{cookie}, false)
+	csrf := csrfOf(t, rec.Body.String())
+	rec = do(t, h, "POST", "/polls/"+itoa(p.ID)+"/status", url.Values{"csrf": {csrf}, "status": {"closed"}}, []*http.Cookie{cookie}, false)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("改状态应 303，得到 %d", rec.Code)
+	}
+	got, err := st.GetPoll(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxTotalChoices != 4 || got.Status != "closed" {
+		t.Fatalf("改状态把整份上限冲掉了：%+v", got)
+	}
+}
+
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }

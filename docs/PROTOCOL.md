@@ -72,6 +72,12 @@ mac = HMAC_SHA256(key = rpc_secret 的 UTF-8 字节, data = payload 去掉末尾
 | `vote.submit` | 见下 | `{"receipt":"K7F2...","vote_id":12}` |
 | `poll.results` | `{"slug":"..","ip":".."}` | `{"poll":{...},"total_votes":3,"questions":[{"..","options":[{"label","count","percent"}]}]}` |
 
+`poll.get` 的 `poll` 里带 `max_total_choices`：整份投票一次提交中所有单选/多选勾选项数之和的上限，
+`0` 表示不限（排序题要求全排序、简答题没有选项，都不计入）。前台据此提示已选数量并拦下超限提交。
+
+`questions[]` 的每道题带 `min_choices` / `max_choices`：多选题的 `min_choices = 0` 表示"可以一项都不选"，
+此时必答只约束"要回答这道题"，空 choices 是合法答案。
+
 `vote.submit` 请求体：
 
 ```json
@@ -118,6 +124,7 @@ digest = sha256(salt + ":" + counter)      # counter 是十进制字符串
 | `captcha_expired` | 验证码过期/不存在 | 验证码已过期，请刷新页面 |
 | `ip_blocked` | IP 命中拦截规则 | 当前网络无法参与本次投票 |
 | `rate_limited` | 触发限流 | 操作太频繁，请稍后再试 |
+| `too_many_choices` | 单选/多选勾选总数超过整份投票上限 | 勾选的选项超过了整份投票的上限，请减少几项再提交 |
 | `internal` | 内部错误 | 服务暂时不可用，请稍后再试 |
 
 `message` 字段只给运维看，前台**不**直接展示（开发模式下才会显示在页面底部）。
